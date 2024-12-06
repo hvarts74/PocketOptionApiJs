@@ -1,11 +1,10 @@
-const WebSocket = require('ws');
-const {Agent} = require("https");
-const isJSON = require('is-json');
-const EventEmitter = require('events');
-const _ = require("lodash");
-const moment = require("moment");
-const { RSI, EMA, BollingerBands } = require('technicalindicators');
-const TimeSynchronizer = require("./timeSynchronizer");
+const WebSocket = require('ws')
+const {Agent} = require("https")
+const EventEmitter = require('events')
+const _ = require("lodash")
+const moment = require("moment")
+const crypto = require('crypto')
+
 class WebSocketClient extends EventEmitter {
     constructor(url, ssid) {
         super();
@@ -14,7 +13,10 @@ class WebSocketClient extends EventEmitter {
         this.websocket = null;
         this.pendingRequests = {}; // Хранилище для обработки ответов
         this.updateStream = false
-        this.timeSynchronizer = new TimeSynchronizer();
+        this.serverTime = null
+
+        this.tickStorage = {}
+        this.interval = 60
     }
 
     connect() {
@@ -23,6 +25,11 @@ class WebSocketClient extends EventEmitter {
                 Origin: 'https://pocketoption.com',
                 'Cache-Control': 'no-cache',
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                "Upgrade": "websocket",
+                "Connection": "upgrade",
+                "Sec-Websocket-Key": crypto.randomBytes(16).toString('base64'),
+                "Sec-Websocket-Version": '13',
+                "Host": 'demo-api-eu.po.market'
             },
             agent: new Agent({
                 rejectUnauthorized: false, // Отключить проверку сертификатов
@@ -48,33 +55,36 @@ class WebSocketClient extends EventEmitter {
         });
     }
 
-    sendRequest(channel, data) {
-        if (!this.websocket || this.websocket.readyState !== WebSocket.OPEN) {
-            console.error('WebSocket is not connected.');
-            return Promise.reject(new Error('WebSocket is not connected.'));
-        }
-
-        const requestId = data.index; // Уникальный идентификатор
-        const message = `42["${channel}",${JSON.stringify(data)}]`;
-
-        return new Promise((resolve, reject) => {
-            this.pendingRequests[requestId] = { resolve, reject }; // Сохраняем промис для ответа
-
-            try {
-                this.sendMessage(message)
-            } catch (err) {
-                reject(err);
-            }
-        });
-    }
-
     sendMessage(message){
         this.websocket.send(message)
-        console.log('Отправили: ' + message)
+        // console.log('Отправили: ' + message)
     }
 
-    getServerTime() {
-        return this.timeSynchronizer.getSyncedTime(); // Текущее серверное время (в секундах)
+    handleTick(asset, timestamp, price){
+        const currentTime = moment.unix(Math.floor(timestamp / this.interval) * this.interval).utc().format("YYYY-MM-DD HH:mm"); // Начало текущей минуты
+
+        // Если свечи ещё нет или наступил новый интервал
+        if (!this.tickStorage[asset] || this.tickStorage[asset].time !== currentTime) {
+            if (this.tickStorage[asset]) {
+                // Завершить предыдущую свечу
+                console.log(`Candle for ${asset}:`, this.tickStorage[asset]);
+            }
+
+            // Создать новую свечу
+            this.tickStorage[asset] = {
+                time: currentTime,
+                open: price,
+                high: price,
+                low: price,
+                close: price,
+            };
+        } else {
+            // Обновить текущую свечу
+            const candle = this.tickStorage[asset];
+            candle.high = Math.max(candle.high, price); // Обновить максимум
+            candle.low = Math.min(candle.low, price);  // Обновить минимум
+            candle.close = price;                     // Закрытие
+        }
     }
 
     handleMessage(message) {
@@ -86,29 +96,10 @@ class WebSocketClient extends EventEmitter {
             // Получаем время ws сервера и производим синхронизация
             if(this.updateStream && message.startsWith('[[')) {
                 const data = eval(message) // 1732927504.36
+                const [asset, timestamp, price] = data[0];
 
-                const serverTime = Math.floor(data[0][1]);
-                this.timeSynchronizer.synchronize(serverTime);
-
+                this.handleTick(asset, timestamp, price);
                 this.updateStream = false
-            }
-
-
-            if (isJSON(message.trim())) {
-                const parsedMessage = JSON.parse(message);
-
-                const { index, asset, period, data } = parsedMessage;
-
-                if (index && this.pendingRequests[index]) {
-                    const { resolve } = this.pendingRequests[index];
-                    delete this.pendingRequests[index]; // Удаляем обработанный запрос
-
-                    if (asset && data) {
-                        resolve({ asset, period, data }); // Результат ответа
-                    } else {
-                        resolve(parsedMessage); // В случае других данных
-                    }
-                }
             }
 
             if (typeof message === "string") {
@@ -123,10 +114,10 @@ class WebSocketClient extends EventEmitter {
                     const jsonMessage = JSON.parse(jsonPart);
 
 
-
                     switch (jsonMessage[0]) {
                         case "successauth":
                             this.emit('authorized');
+                            console.log('AUTH SUCCESS!!!');
                             break;
                         case "successupdateBalance":
                             // console.log("Balance updated successfully");
@@ -135,8 +126,9 @@ class WebSocketClient extends EventEmitter {
                             // console.log("Order opened successfully");
                             break;
                         case "updateClosedDeals":
+                            this.sendMessage(`42["changeSymbol",{"asset":"AUDNZD_otc","period":${this.interval}]`);
+                            this.sendMessage(`42["changeSymbol",{"asset":"EURJPY_otc","period":${this.interval}}]`);
                             // console.log("Update closed deals received");
-                            this.sendMessage('42["changeSymbol",{"asset":"AUDNZD_otc","period":60}]');
                             break;
                         case "successcloseOrder":
                             // console.log("Order closed successfully");
@@ -167,5 +159,14 @@ class WebSocketClient extends EventEmitter {
     }
 }
 
+const ssid = `42["auth",{"session":"ukdgau9urq0em5ukspkcmej67n","isDemo":1,"uid":84894043,"platform":1}]`
+const wsUrl = 'wss://demo-api-eu.po.market/socket.io/?EIO=4&transport=websocket'
 
-module.exports = WebSocketClient;
+const client = new WebSocketClient(wsUrl, ssid);
+
+client.connect();
+
+setInterval(async () => {
+    client.sendMessage('42["ps"]')
+}, 20000)
+
