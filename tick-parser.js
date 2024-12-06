@@ -4,6 +4,7 @@ const EventEmitter = require('events')
 const _ = require("lodash")
 const moment = require("moment")
 const crypto = require('crypto')
+const prisma = require('./prisma/prismaClient'); // Подключение Prisma
 
 class WebSocketClient extends EventEmitter {
     constructor(url, ssid) {
@@ -17,6 +18,14 @@ class WebSocketClient extends EventEmitter {
 
         this.tickStorage = {}
         this.interval = 60
+
+        this.currencyPairs = [
+            "EURUSD_otc",
+            // "AUDCAD_otc",
+            // "AUDCHF_otc",
+            // "AUDJPY_otc",
+            // "AUDNZD_otc",
+        ];
     }
 
     connect() {
@@ -58,6 +67,8 @@ class WebSocketClient extends EventEmitter {
                 message: 'WebSocket error',
                 error: err
             })
+
+            setTimeout(() => this.connect(), 1000)
         });
     }
 
@@ -66,19 +77,26 @@ class WebSocketClient extends EventEmitter {
         // console.log('Отправили: ' + message)
     }
 
-    handleTick(asset, timestamp, price){
+    async handleTick(asset, timestamp, price){
         const currentTime = moment.unix(Math.floor(timestamp / this.interval) * this.interval).utc().format("YYYY-MM-DD HH:mm") // Начало текущей минуты
+
+        // Перевод обратно в Unix timestamp (в секундах)
+        const unixTime = moment(currentTime, "YYYY-MM-DD HH:mm").unix() * 1000;
 
         // Если свечи ещё нет или наступил новый интервал
         if (!this.tickStorage[asset] || this.tickStorage[asset].time !== currentTime) {
             if (this.tickStorage[asset]) {
                 // Завершить предыдущую свечу
                 console.log(`Candle for ${asset}:`, this.tickStorage[asset])
+
+                // Сохранить свечу в базу
+                 await this.saveCandleToDatabase(asset, this.interval, this.tickStorage[asset]);
             }
 
             // Создать новую свечу
             this.tickStorage[asset] = {
                 time: currentTime,
+                timestamp: unixTime,
                 open: price,
                 high: price,
                 low: price,
@@ -93,7 +111,7 @@ class WebSocketClient extends EventEmitter {
         }
     }
 
-    handleMessage(message) {
+    async handleMessage(message) {
         try {
             if (Buffer.isBuffer(message)) {
                 message = message.toString('utf-8').trim() // Декодируем Buffer в строку
@@ -104,7 +122,8 @@ class WebSocketClient extends EventEmitter {
                 const data = eval(message) // 1732927504.36
                 const [asset, timestamp, price] = data[0]
 
-                this.handleTick(asset, timestamp, price)
+                await this.handleTick(asset, timestamp, price)
+
                 this.updateStream = false
             }
 
@@ -132,8 +151,10 @@ class WebSocketClient extends EventEmitter {
                             // console.log("Order opened successfully");
                             break;
                         case "updateClosedDeals":
-                            this.sendMessage(`42["changeSymbol",{"asset":"AUDNZD_otc","period":${this.interval}]`)
-                            // this.sendMessage(`42["changeSymbol",{"asset":"EURJPY_otc","period":${this.interval}}]`);
+                            this.currencyPairs.forEach((pair) => {
+                                this.sendMessage(`42["changeSymbol",{"asset":"${pair}","period":${client.interval}}]`);
+                            });
+                             // this.sendMessage(`42["changeSymbol",{"asset":"AUDNZD_otc","period":${this.interval}}]`)
                             // console.log("Update closed deals received");
                             break;
                         case "successcloseOrder":
@@ -147,7 +168,6 @@ class WebSocketClient extends EventEmitter {
                             // console.log("Stream updated");
                             break;
                         case "updateHistoryNew":
-                            console.log(message)
                             // console.log("New history updated");
                             break;
                         case "NotAuthorized":
@@ -160,7 +180,28 @@ class WebSocketClient extends EventEmitter {
                 }
             }
         } catch (err) {
-            console.error('Error processing message:', err)
+            console.error('Error processing message:', {err, message})
+        }
+    }
+
+
+    async saveCandleToDatabase(asset, interval, candle) {
+        try {
+            await prisma.candle.create({
+                data: {
+                    asset: asset,
+                    interval: interval,
+                    time: new Date(candle.time), // Преобразование в формат DateTime
+                    timestamp: candle.timestamp,
+                    open: candle.open,
+                    high: candle.high,
+                    low: candle.low,
+                    close: candle.close,
+                },
+            });
+            console.log(`Candle for ${asset} saved to database.`);
+        } catch (error) {
+            console.error('Error saving candle to database:', error);
         }
     }
 }

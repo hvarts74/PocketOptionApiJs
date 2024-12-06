@@ -1,0 +1,30 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model Candle {
+  id          Int      @id @default(autoincrement()) // Уникальный идентификатор
+  asset       String   // Название валютной пары (например, EURUSD_otc)
+  interval    Int      // Интервал свечи в секундах (например, 60 для 1 минуты)
+  time   DateTime // Время начала свечи (UTC или в формате Pocket Option)
+  timestamp BigInt // Время в милисекундах unix timestamp
+  open        Float    // Цена открытия
+  high        Float    // Максимальная цена
+  low         Float    // Минимальная цена
+  close       Float    // Цена закрытия
+  createdAt   DateTime @default(now()) // Время создания записи
+  updatedAt   DateTime @updatedAt      // Время последнего обновления записи
+
+  @@index([asset, interval, time]) // Индекс для быстрого поиска по паре, интервалу и времени
+}
