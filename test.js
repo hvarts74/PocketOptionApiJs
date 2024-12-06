@@ -8,19 +8,19 @@ const client = new WebSocketClient(wsUrl, ssid);
 
 client.connect();
 
-client.on('authorized', async () => {
-    setInterval(async () => {
-        const candles = await client.getCandles('EURJPY_otc', 60, 900);
-        // console.log(candles)
-
-        const formattedData = candles.data.map((item) => ({
-            time: moment.unix(item.time).format('YYYY-MM-DD HH:mm:ss'),
-            open: item.open,
-            close: item.close,
-            high: item.high,
-            low: item.low,
-        }));
-        //
-        console.log(formattedData)
-    }, 5000);
-})
+// client.on('authorized', async () => {
+//     setInterval(async () => {
+//         const candles = await client.getCandles('EURJPY_otc', 60, 900);
+//         // console.log(candles)
+//
+//         const formattedData = candles.data.map((item) => ({
+//             time: moment.unix(item.time).format('YYYY-MM-DD HH:mm:ss'),
+//             open: item.open,
+//             close: item.close,
+//             high: item.high,
+//             low: item.low,
+//         }));
+//         //
+//         console.log(formattedData)
+//     }, 5000);
+// })

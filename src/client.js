@@ -100,8 +100,6 @@ class WebSocketClient extends EventEmitter {
                 message = message.toString('utf-8').trim(); // Декодируем Buffer в строку
             }
 
-
-
             // Получаем время ws сервера и производим синхронизация
             if(this.updateStream && message.startsWith('[[')) {
                 const data = eval(message) // 1732927504.36
